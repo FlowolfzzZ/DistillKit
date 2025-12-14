@@ -1,0 +1,48 @@
+project_name: distillkit-afm-online-test
+trust_remote_code: true
+model: arcee-ai/AFM-4.5B-Base
+output_path: /workspace/models/afm-4p5b-instructdistill
+use_flash_attention: true
+sequence_length: 8192
+dataset:
+  train_dataset:
+    repo_id: allenai/tulu-3-sft-mixture
+    split: train
+  seed: 42
+loss_functions:
+  - function: cross_entropy
+    weight: 0.25
+  - function: kl
+    weight: 0.25
+    temperature: 2.0
+  - function: hs_cosine
+    weight: 0.5
+layer_mapping: all
+teacher:
+  kind: hf
+  path: arcee-ai/AFM-4.5B
+  kwargs:
+    attn_implementation: flash_attention_2
+    torch_dtype: bfloat16
+training_args:
+  dataset_text_field: text
+  packing: True
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  save_steps: 200
+  save_total_limit: 1
+  logging_steps: 1
+  learning_rate: 1.0e-5
+  weight_decay: 0.05
+  warmup_ratio: 0.025
+  lr_scheduler_type: cosine
+  bf16: true
+  max_grad_norm: 0.5
+  optim: adamw_torch
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+  report_to: wandb
+  push_to_hub: false
+  dataset_num_proc: 96
