@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "distillkit"
 description = "Tools for online and offline distillation of large language models."
-version = "0.2.0"
+version = "1.0.0"
 authors = [
     { name = "Charles Goddard", email = "charles@arcee.ai" },
     { name = "Lucas Atkins", email = "lucas@arcee.ai" },
