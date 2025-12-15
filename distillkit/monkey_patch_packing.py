@@ -133,10 +133,11 @@ def monkey_patch_for_model_with_name(model_type: str, modelling_type: str):
     module = getattr(getattr(transformers, model_type), modelling_type)
     if hasattr(module, "_get_unpad_data"):
         module._get_unpad_data = get_unpad_data
-    print(
-        f"cannot packing llama because _get_unpad_data was not found in transformers.{model_type}.{modelling_type}.py or transformers.modeling_flash_attention_utils._get_unpad_data"
-    )
-    sys.exit(1)
+    else:
+        print(
+            f"cannot packing llama because _get_unpad_data was not found in transformers.{model_type}.{modelling_type}.py or transformers.modeling_flash_attention_utils._get_unpad_data"
+        )
+        sys.exit(1)
 
 
 def monkey_patch_packing_for_model(pretrained_model):
