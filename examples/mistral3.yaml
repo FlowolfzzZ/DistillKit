@@ -1,0 +1,57 @@
+project_name: mistral3-24b-dsv3tok
+model: arcee-train/Mistral3-24B-DSV3Tok-BaseDistill-Multilingual-Slerp
+model_auto_class: AutoModelForImageTextToText
+output_path: /workspace/models/Mistral3-24B-DSV3Tok-MixedReasoning-V1
+resize_embeddings_to_multiple_of: 64
+use_flash_attention: true
+frozen_modules:
+  - vision_tower
+  - multi_modal_projector
+sequence_length: 16384
+dataset:
+  train_dataset:
+    repo_id: arcee-ai/DeepSeek-MixedModeReasoning-Logits-Packed-16384
+    split: train
+  seed: 58347
+  prepacked: true
+loss_functions:
+  - function: cross_entropy
+    weight: 0.5
+  - function: kl
+    weight: 0.5
+    temperature: 1.0
+    missing_probability_handling: zero
+    sparse_chunk_length: 1024
+functionary_packing: true
+teacher:
+  kind: dataset
+  vocab_size: 129280
+  legacy_logit_compression:
+    vocab_size: 129280
+    k: 32
+    exact_k: 32
+    polynomial_degree: 0
+    with_sqrt_term: false
+    term_dtype: float32
+    invert_polynomial: true
+training_args:
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  save_steps: 512
+  save_total_limit: 4
+  logging_steps: 1
+  learning_rate: 2.e-7
+  weight_decay: 0.05
+  warmup_ratio: 0.025
+  lr_scheduler_type: linear
+  bf16: true
+  remove_unused_columns: false
+  optim: paged_adamw_8bit
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+  report_to: wandb
+  push_to_hub: true
+  hub_model_id: arcee-train/Mistral3-24B-DSV3Tok-MixedReasoning-V1
+  hub_strategy: every_save

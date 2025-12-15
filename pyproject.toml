@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "distillkit"
+description = "Tools for online and offline distillation of large language models."
+version = "1.0.0"
+authors = [
+    { name = "Charles Goddard", email = "charles@arcee.ai" },
+    { name = "Lucas Atkins", email = "lucas@arcee.ai" },
+]
+requires-python = ">=3.10"
+dependencies = [
+    "trl~=0.25.1",
+    "accelerate~=1.11.0",
+    "transformers>=4.50.3",
+    "datasets>=3.5.0",
+    "pydantic~=2.12.4",
+    "click~=8.3.0",
+    "torch>=2.0.0",
+    "wandb",
+    "tqdm",
+]
+
+
+[project.scripts]
+distillkit = "distillkit.main:main"
+
+[project.optional-dependencies]
+dev = ["pytest~=9.0.2", "ruff~=0.14.9"]
+capture = [
+    "vllm @ git+https://github.com/cg123/vllm.git@multinomial2",
+    "pyarrow",
+]
+
+[project.urls]
+repository = "https://github.com/arcee-ai/distillkit"
+
+[tool.setuptools]
+packages = ["distillkit", "distillkit.compression", "distillkit.lossfuncs"]

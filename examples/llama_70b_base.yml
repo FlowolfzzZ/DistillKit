@@ -1,0 +1,53 @@
+project_name: llama3p3-70b-dsv3tok
+model: /workspace/models/Llama-3.3-70B-DSV3Tok
+model_auto_class: AutoModelForCausalLM
+output_path: /workspace/models/Llama-3.3-70B-DSV3Tok-BaseDistill-T1
+resize_embeddings_to_multiple_of: 64
+use_flash_attention: true
+sequence_length: 8192
+dataset:
+  train_dataset:
+    repo_id: arcee-ai/DeepSeek-DCLM-Logits-Packed-8192
+    split: train
+  seed: 9
+  prepacked: true
+teacher:
+  kind: dataset
+  legacy_logit_compression:
+    vocab_size: 129280
+    k: 128
+    exact_k: 32
+    polynomial_degree: 8
+    with_sqrt_term: false
+    term_dtype: float32
+    invert_polynomial: true
+loss_functions:
+  - function: cross_entropy
+    weight: 0.5
+  - function: kl
+    weight: 0.5
+    temperature: 1.0
+    missing_probability_handling: zero
+    sparse_chunk_length: 1024
+
+training_args:
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  save_steps: 512
+  save_total_limit: 4
+  logging_steps: 1
+  learning_rate: 2.e-7
+  weight_decay: 0.01
+  warmup_ratio: 0.025
+  lr_scheduler_type: linear
+  bf16: true
+  remove_unused_columns: false
+  optim: paged_adamw_8bit
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+  report_to: wandb
+  push_to_hub: true
+  hub_model_id: arcee-train/Llama-3.3-70B-DSV3Tok-BaseDistill-T1
+  hub_strategy: every_save
