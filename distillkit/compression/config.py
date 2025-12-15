@@ -127,7 +127,7 @@ class DistributionQuantizationConfig(BaseModel):
     def logprob_bits(self) -> int:
         res = 0
         res += self.exact_k * self.exact_dtype.bit_width()
-        res += len(self.polynomial_terms) * self.term_dtype.bit_width()
+        res += len(self.polynomial_terms or []) * self.term_dtype.bit_width()
         for bin in self.residual_bins:
             bin_bits = bin.scale_dtype.bit_width() + bin.element_bits * bin.num_elements
             if bin_bits % 8 != 0:
