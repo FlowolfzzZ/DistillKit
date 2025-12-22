@@ -21,11 +21,19 @@ loss_functions:
 
 teachers:
   - kind: hf
-    path: /ssd4/lizijian/Models/Meta-Llama-3.1-8B-Instruct
+    path: /ssd4/lizijian/Codes/mergekit/output_model/Meta-Llama-3.1-8B-Instruct_tokensurgeon_Qwen3-4B
     kwargs:
       attn_implementation: flash_attention_2
       torch_dtype: bfloat16
       device_map: cuda:1
+  - kind: hf
+    path: /ssd4/lizijian/Models/Qwen3-8B
+    kwargs:
+      attn_implementation: flash_attention_2
+      torch_dtype: bfloat16
+      device_map: cuda:2
+
+compute_device: cuda:3
 
 training_args:
   dataset_text_field: text

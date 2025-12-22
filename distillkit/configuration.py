@@ -1,6 +1,6 @@
 # Copyright 2025 Arcee AI
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, Annotated
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypeAlias
@@ -150,9 +150,9 @@ class DistillationRunConfig(BaseModel):
         alias="model",
     )
     dataset: DatasetConfiguration
-    teacher: TeacherModelConfig | TeacherDatasetConfig = Field(
-        ..., discriminator="kind"
-    )
+    teachers: list[
+        Annotated[TeacherModelConfig | TeacherDatasetConfig, Field(..., discriminator="kind")]
+    ]
     sequence_length: int = Field(
         description="Sequence length for training.",
     )
@@ -182,6 +182,9 @@ class DistillationRunConfig(BaseModel):
                 missing_probability_handling=MissingProbabilityHandling.ZERO,
             ),
         ],
+    )
+    compute_device: str = Field(
+        description="Device to use for logits computation (e.g., 'cuda:0', 'cpu').",
     )
     layer_mapping: list[tuple[int, int]] | Literal["all"] | None = Field(
         default=None,

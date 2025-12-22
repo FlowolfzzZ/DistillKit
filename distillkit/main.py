@@ -250,23 +250,32 @@ def load_student_model(
 
 
 def create_signal_source(
-    config: DistillationRunConfig, vocab_size: int
+    teacher_config: TeacherModelConfig | TeacherDatasetConfig, vocab_size: int
 ) -> SignalSource:
-    if isinstance(config.teacher, TeacherDatasetConfig):
+    if isinstance(teacher_config, TeacherDatasetConfig):
         compressor = LogprobCompressor(
-            config=config.teacher.logprob_compressor,
-            legacy_config=config.teacher.legacy_logit_compression,
+            config=teacher_config.logprob_compressor,
+            legacy_config=teacher_config.legacy_logit_compression,
         )
         return OfflineSignalSource(compressor, vocab_size=vocab_size)
-    elif isinstance(config.teacher, TeacherModelConfig):
+    elif isinstance(teacher_config, TeacherModelConfig):
         teacher_model = transformers.AutoModelForCausalLM.from_pretrained(
-            config.teacher.path, **(config.teacher.kwargs or {})
+            teacher_config.path, **(teacher_config.kwargs or {})
         )
         return OnlineSignalSource(
-            teacher_model, vocab_size=vocab_size, sparsify_top_k=config.teacher.top_k
+            teacher_model, vocab_size=vocab_size, sparsify_top_k=teacher_config.top_k
         )
     else:
         raise RuntimeError("Teacher configuration invalid")
+
+
+def create_multi_signal_sources(
+    config: DistillationRunConfig, vocab_size: int
+) -> list[SignalSource]:
+    multi_signal_sources = []
+    for teacher_config in config.teachers:
+        multi_signal_sources.append(create_signal_source(teacher_config, vocab_size))
+    return multi_signal_sources
 
 
 def collate_packed_batch(examples):
@@ -279,12 +288,12 @@ def collate_packed_batch(examples):
 
 
 def load_tokenizer(config: DistillationRunConfig) -> transformers.PreTrainedTokenizer:
-    if isinstance(config.teacher, TeacherModelConfig):
-        src_path = config.teacher.path
-        logging.info("Using teacher's tokenizer")
-    else:
-        src_path = config.train_model
-        logging.info("Using student's tokenizer")
+    # if isinstance(config.teacher, TeacherModelConfig):
+    #     src_path = config.teacher.path
+    #     logging.info("Using teacher's tokenizer")
+    # else:
+    src_path = config.train_model
+    logging.info("Using student's tokenizer")
     return transformers.AutoTokenizer.from_pretrained(
         src_path,
         trust_remote_code=config.trust_remote_code,
@@ -325,30 +334,34 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         dataset_kwargs=dataset_kwargs,
     )
 
-    signal_source = create_signal_source(config, tokenizer_vocab_size)
-    if config.layer_mapping is not None:
-        if not isinstance(signal_source, OnlineSignalSource):
-            raise RuntimeError(
-                "Hidden state distillation not supported for offline teachers"
+    multi_signal_sources = create_multi_signal_sources(config, tokenizer_vocab_size)
+    hsms = []
+    for signal_source in multi_signal_sources:
+        if config.layer_mapping is not None:
+            if not isinstance(signal_source, OnlineSignalSource):
+                raise RuntimeError(
+                    "Hidden state distillation not supported for offline teachers"
+                )
+            teacher_hidden_size = signal_source.teacher_model.config.hidden_size
+            if config.layer_mapping == "all":
+                mapping = [(i, i) for i in range(model.config.num_hidden_layers)]
+            else:
+                mapping = config.layer_mapping
+            hsm = HiddenStateMapping(
+                student=model,
+                teacher_hidden_size=teacher_hidden_size,
+                layer_mapping=mapping,
+                force_projection=config.force_hidden_state_projection,
             )
-        teacher_hidden_size = signal_source.teacher_model.config.hidden_size
-        if config.layer_mapping == "all":
-            mapping = [(i, i) for i in range(model.config.num_hidden_layers)]
         else:
-            mapping = config.layer_mapping
-        hsm = HiddenStateMapping(
-            student=model,
-            teacher_hidden_size=teacher_hidden_size,
-            layer_mapping=mapping,
-            force_projection=config.force_hidden_state_projection,
-        )
-    else:
-        hsm = None
+            hsm = None
+        hsms.append(hsm)
+    
     trainer = DistillationTrainer(
         model=model,
         config=config,
-        signal_source=signal_source,
-        hidden_state_mapping=hsm,
+        multi_signal_sources=multi_signal_sources,
+        multi_hidden_state_mappings=hsms,
         true_vocab_size=tokenizer_vocab_size,
         train_dataset=ds_train,
         eval_dataset=ds_eval,
