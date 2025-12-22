@@ -114,7 +114,7 @@ class OnlineSignalSource(SignalSource):
     ) -> TeacherSignal:
         with torch.no_grad():
             teacher_outputs = self.teacher_model(
-                input_ids=batch["input_ids"],
+                input_ids=batch["input_ids"].to(self.teacher_model.device),
                 attention_mask=batch.get("attention_mask", None),
                 output_hidden_states=return_hidden_states,
                 **self.teacher_kwargs,

@@ -1,0 +1,71 @@
+dataset:
+  eos_label_token_ids: null
+  eval_dataset: null
+  num_eval_samples: null
+  num_samples: null
+  prepacked: false
+  prepared_dataset_path: null
+  seed: 42
+  train_dataset:
+    config_name: null
+    repo_id: /ssd4/lizijian/Datasets/allenai/tulu-3-sft-mixture
+    revision: null
+    split: train
+force_hidden_state_projection: false
+frozen_modules: null
+frozen_res: null
+functionary_packing: false
+layer_mapping: null
+loss_functions:
+- function: cross_entropy
+  margin: null
+  missing_probability_handling: null
+  sparse_chunk_length: null
+  temperature: null
+  weight: 0.5
+- function: kl
+  margin: null
+  missing_probability_handling: null
+  sparse_chunk_length: null
+  temperature: 2.0
+  weight: 0.5
+model: /ssd4/lizijian/Models/Qwen3-4B
+model_auto_class: AutoModelForCausalLM
+model_kwargs:
+  device_map: cuda:0
+output_path: ./output/qwen3-4b-instruct-distill
+project_name: multi-teacher
+resize_embeddings_to_multiple_of: null
+sequence_length: 4096
+teacher:
+  kind: hf
+  kwargs:
+    attn_implementation: flash_attention_2
+    device_map: cuda:1
+    torch_dtype: bfloat16
+  path: /ssd4/lizijian/Models/Meta-Llama-3.1-8B-Instruct
+  top_k: null
+training_args:
+  bf16: true
+  dataset_num_proc: 96
+  dataset_text_field: text
+  gradient_accumulation_steps: 8
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+  learning_rate: 1.0e-05
+  logging_steps: 1
+  lr_scheduler_type: cosine
+  max_grad_norm: 0.5
+  num_train_epochs: 1
+  optim: paged_adamw_8bit
+  packing: true
+  per_device_train_batch_size: 1
+  push_to_hub: false
+  report_to: wandb
+  save_steps: 200
+  save_total_limit: 1
+  warmup_ratio: 0.025
+  weight_decay: 0.05
+trust_remote_code: false
+use_flash_attention: true

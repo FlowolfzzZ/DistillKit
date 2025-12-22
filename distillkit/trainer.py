@@ -55,10 +55,10 @@ class DistillationTrainer(SFTTrainer):
                 "Must define a hidden state mapping to use hidden state losses."
             )
 
-        if isinstance(self.signal_source, OnlineSignalSource):
-            self.signal_source.teacher_model = self.signal_source.teacher_model.to(
-                self.accelerator.device
-            )
+        # if isinstance(self.signal_source, OnlineSignalSource):
+        #     self.signal_source.teacher_model = self.signal_source.teacher_model.to(
+        #         self.accelerator.device
+        #     )
 
         self.model_accepts_loss_kwargs = False
 
@@ -108,6 +108,9 @@ class DistillationTrainer(SFTTrainer):
             inputs,
             return_hidden_states=self.need_hidden_states,
         )
+        if signal.hidden_states is not None:
+            signal.hidden_states = tuple(hs.to(self.model.device) for hs in signal.hidden_states)
+        signal.logits = signal.logits.to(self.model.device)
 
         losses = []
         loss_fns = []
