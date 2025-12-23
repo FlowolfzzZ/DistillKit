@@ -56,4 +56,4 @@ training_args:
     use_reentrant: false
   report_to: wandb
   push_to_hub: false
-  dataset_num_proc: 96
+  dataset_num_proc: 32

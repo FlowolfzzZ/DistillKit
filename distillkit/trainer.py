@@ -104,6 +104,7 @@ class DistillationTrainer(SFTTrainer):
         student_outputs.loss = student_outputs.loss.to(student_model.device)
         if student_outputs.hidden_states is not None:
             student_outputs.hidden_states = tuple(hs.to(student_model.device) for hs in student_outputs.hidden_states)
+        torch.cuda.empty_cache()
         
         return (total_loss, student_outputs) if return_outputs else total_loss
 
@@ -123,32 +124,37 @@ class DistillationTrainer(SFTTrainer):
                 inputs,
                 return_hidden_states=self.need_hidden_states,
             )
-            if signal.hidden_states is not None:
-                signal.hidden_states = tuple(hs.to(self.config.compute_device) for hs in signal.hidden_states)
-            signal.logits = signal.logits.to(self.config.compute_device)
             signals.append(signal)
 
         losses = []
         loss_fns = []
         weights = []
-        for signal in signals:
-            for idx, loss_fn in enumerate(self.loss_functions):
-                cfg = self.config.loss_functions[idx]
+        for i, signal in enumerate(signals):
+            if signal.hidden_states is not None:
+                signal.hidden_states = tuple(hs.to(self.config.compute_device) for hs in signal.hidden_states)
+            signal.logits = signal.logits.to(self.config.compute_device)
+            for j, loss_fn in enumerate(self.loss_functions):
+                cfg = self.config.loss_functions[j]
                 loss = loss_fn(
                     student_outputs,
                     signal,
                     mask=valid_mask,
-                    hidden_state_mapping=self.multi_hidden_state_mappings[idx],
+                    hidden_state_mapping=self.multi_hidden_state_mappings[i],
                     num_items_in_batch=num_items_in_batch,
                 )
                 losses.append(loss)
                 loss_fns.append(cfg.function.value)
                 weights.append(cfg.weight)
+            # recover
+            if signal.hidden_states is not None:
+                signal.hidden_states = tuple(hs.to(self.model.device) for hs in signal.hidden_states)
+            signal.logits = signal.logits.to(self.model.device)
+            torch.cuda.empty_cache()
 
         total_loss = 0.0
         for loss, weight in zip(losses, weights):
             total_loss += loss * weight
-        total_loss = total_loss / sum(weights)
+        total_loss = total_loss / sum(weights) / len(self.multi_signal_sources)
         self.log(
             {
                 f"distillation_loss/{idx + 1}_{loss_fn}": loss.item()
