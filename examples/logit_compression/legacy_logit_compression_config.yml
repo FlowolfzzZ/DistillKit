@@ -1,0 +1,10 @@
+legacy_logit_compression:
+  vocab_size: 151669
+  k: 128
+  exact_k: 32
+  exact_dtype: bfloat16
+  polynomial_degree: 8
+  with_sqrt_term: false
+  term_dtype: float32
+  invert_polynomial: true
+  residual_bins: []

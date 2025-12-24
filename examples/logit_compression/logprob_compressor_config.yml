@@ -1,0 +1,10 @@
+logprob_compressor:
+  d: 151669
+  k: 128
+  exact_k: 16
+  exact_dtype: bfloat16
+  polynomial_terms: [0, 1, 2, 3, 4, "sqrt"]
+  term_dtype: float32
+  residual_bins: []
+  delta_encoding: false
+  error_diffusion: false

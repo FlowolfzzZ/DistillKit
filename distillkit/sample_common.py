@@ -114,17 +114,17 @@ def load_preprocess_data(
             lambda x: {
                 "text": do_chat_template(x, tokenizer),
             },
-            num_proc=64,
+            num_proc=32,
         )
-    ds = ds.filter(lambda row: row["text"] and row["text"].strip(), num_proc=64)
+    ds = ds.filter(lambda row: row["text"] and row["text"].strip(), num_proc=32)
     ds = ds.map(
         lambda x: {
             "input_ids": truncate_tokens(
                 x["text"], tokenizer, max_seq_len, add_extra_pad_token
             )
         },
-        num_proc=64,
-    ).filter(lambda x: len(x["input_ids"]) > 0, num_proc=64)
+        num_proc=32,
+    ).filter(lambda x: len(x["input_ids"]) > 0, num_proc=32)
     return ds
 
 

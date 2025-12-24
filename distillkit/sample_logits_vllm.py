@@ -19,8 +19,13 @@ from vllm.logprobs import FlatLogprobs, PromptLogprobs
 from distillkit.compression import DistributionQuantizationConfig, LogprobCompressor
 from distillkit.sample_common import (
     StreamingParquetWriter,
+    legacy_compressed_logit_schema,
     compressed_logit_schema,
     load_preprocess_data,
+)
+from distillkit.compression.config import (
+    DistributionQuantizationConfig,
+    LegacyLogitCompressionConfig,
 )
 
 
@@ -81,34 +86,40 @@ def sample_logits(
 
     # load compression config
     with open(compression_config, "r") as f:
-        cfg = DistributionQuantizationConfig.model_validate(yaml.safe_load(f))
+        cfg = yaml.safe_load(f)
+        if "legacy_logit_compression" in cfg:
+            cfg = LegacyLogitCompressionConfig.model_validate(cfg["legacy_logit_compression"])
+            vocab_size = cfg.vocab_size
+        else:
+            cfg = DistributionQuantizationConfig.model_validate(cfg["logprob_compressor"])
+            vocab_size = cfg.d
     k = cfg.k
 
     tok_vocab = tok.get_vocab()
-    tok_vocab_size = max(len(tok_vocab) + 1, max(tok_vocab.values()))
-    if cfg.d != tok_vocab_size:
+    tok_vocab_size = max(len(tok_vocab), max(tok_vocab.values()))
+    if vocab_size != tok_vocab_size:
         if auto_vocab_size:
-            cfg.d = tok_vocab_size
+            vocab_size = tok_vocab_size
             logging.warning(
                 f"Automatically set compressor vocab size to {tok_vocab_size}"
             )
-        elif cfg.d < tok_vocab_size:
+        elif vocab_size < tok_vocab_size:
             logging.error("Compression config has too small vocabulary size!")
             logging.error(
-                f"cfg.d: {cfg.d}, effective tokenizer vocab size: {tok_vocab_size}"
+                f"vocab_size: {vocab_size}, effective tokenizer vocab size: {tok_vocab_size}"
             )
             sys.exit(-1)
         elif (
-            abs(cfg.d - tok_vocab_size) > 32
+            abs(vocab_size - tok_vocab_size) > 32
         ):  # allow a little wiggle room for common padding
             logging.warning(
-                f"Vocabulary size in compression config ({cfg.d}) is larger than needed ({tok_vocab_size}). "
+                f"Vocabulary size in compression config ({vocab_size}) is larger than needed ({tok_vocab_size}). "
                 "This will work but may consume more space than needed - double check that this is what you want."
             )
 
     os.makedirs(output, exist_ok=True)
     with open(
-        os.path.join(output, "compression_config.yaml"), "w", encoding="utf-8"
+        os.path.join(output, "compression_config.yml"), "w", encoding="utf-8"
     ) as f:
         yaml.safe_dump(cfg.model_dump(mode="json"), f)
 
@@ -134,15 +145,17 @@ def sample_logits(
         tensor_parallel_size=tensor_parallel_size,
         pipeline_parallel_size=pipeline_parallel_size,
         enable_expert_parallel=enable_expert_parallel,
+        seed=seed,
         gpu_memory_utilization=gpu_memory_utilization,
         max_logprobs=k,
         logprobs_mode="raw_logprobs",
         max_model_len=max_model_len,
     )
 
-    compressor = LogprobCompressor(
-        config=cfg,
-    )
+    if isinstance(cfg, LegacyLogitCompressionConfig):
+        compressor = LogprobCompressor(legacy_config=cfg)
+    else:
+        compressor = LogprobCompressor(config=cfg)
 
     sampling_params = vllm.SamplingParams(
         temperature=1.0,
@@ -179,25 +192,45 @@ def sample_logits(
             top_values,
         )
 
-        compressed_logprobs_list = (
-            row_out["compressed_logprobs"].cpu().squeeze(0).tolist()
-        )
-        bytepacked_indices_list = (
-            row_out["bytepacked_indices"].cpu().squeeze(0).tolist()
-        )
+        if compressor.legacy_compressor is not None:
+            packed_indices_list = (
+                row_out["packed_indices"].cpu().squeeze(0).tolist()
+            )
+            exact_values_list = (
+                row_out["exact_values"].cpu().squeeze(0).tolist()
+            )
+            coeffs_list = (
+                row_out["coeffs"].cpu().squeeze(0).tolist()
+            )
 
-        writer.write(
-            {
-                "input_ids": input_ids_sample,
-                "compressed_logprobs": compressed_logprobs_list,
-                "bytepacked_indices": bytepacked_indices_list,
-            }
-        )
+            writer.write(
+                {
+                    "input_ids": input_ids_sample,
+                    "packed_indices": packed_indices_list,
+                    "exact_values": exact_values_list,
+                    "coeffs": coeffs_list
+                }
+            )
+        else:
+            compressed_logprobs_list = (
+                row_out["compressed_logprobs"].cpu().squeeze(0).tolist()
+            )
+            bytepacked_indices_list = (
+                row_out["bytepacked_indices"].cpu().squeeze(0).tolist()
+            )
+
+            writer.write(
+                {
+                    "input_ids": input_ids_sample,
+                    "compressed_logprobs": compressed_logprobs_list,
+                    "bytepacked_indices": bytepacked_indices_list,
+                }
+            )
 
     try:
         with StreamingParquetWriter(
             output,
-            schema=compressed_logit_schema(),
+            schema=legacy_compressed_logit_schema() if compressor.legacy_compressor is not None else compressed_logit_schema(),
             file_max_rows=macrobatch_size,
             queue_maxsize=macrobatch_size * 2,
         ) as writer:
