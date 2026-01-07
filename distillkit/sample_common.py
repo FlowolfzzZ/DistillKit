@@ -303,6 +303,7 @@ class StreamingParquetWriter:
 def legacy_compressed_logit_schema() -> pyarrow.Schema:
     return pyarrow.schema(
         [
+            pyarrow.field("id", pyarrow.string()),
             pyarrow.field("input_ids", pyarrow.list_(pyarrow.uint64())),
             pyarrow.field(
                 "packed_indices", pyarrow.list_(pyarrow.list_(pyarrow.uint64()))
@@ -318,6 +319,7 @@ def legacy_compressed_logit_schema() -> pyarrow.Schema:
 def compressed_logit_schema() -> pyarrow.Schema:
     return pyarrow.schema(
         [
+            pyarrow.field("id", pyarrow.string()),
             pyarrow.field("input_ids", pyarrow.list_(pyarrow.uint64())),
             pyarrow.field(
                 "compressed_logprobs", pyarrow.list_(pyarrow.list_(pyarrow.uint8()))

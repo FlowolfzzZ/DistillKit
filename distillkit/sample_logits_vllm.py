@@ -178,6 +178,7 @@ def sample_logits(
     def process_and_write_sample(
         req_out: vllm.RequestOutput,
         input_ids_sample: list[int],
+        id_sample: str,
         k: int,
         compressor: LogprobCompressor,
         writer: StreamingParquetWriter,
@@ -205,6 +206,7 @@ def sample_logits(
 
             writer.write(
                 {
+                    "id": id_sample,
                     "input_ids": input_ids_sample,
                     "packed_indices": packed_indices_list,
                     "exact_values": exact_values_list,
@@ -221,6 +223,7 @@ def sample_logits(
 
             writer.write(
                 {
+                    "id": id_sample,
                     "input_ids": input_ids_sample,
                     "compressed_logprobs": compressed_logprobs_list,
                     "bytepacked_indices": bytepacked_indices_list,
@@ -240,6 +243,7 @@ def sample_logits(
                 for i0 in tqdm.tqdm(
                     range(0, len(ds), macrobatch_size), desc="Logit Batches"
                 ):
+                    batch_id = ds[i0 : i0 + macrobatch_size]["id"]
                     batch_input_ids = ds[i0 : i0 + macrobatch_size]["input_ids"]
                     # Submit CPU processing tasks to background thread
                     for idx, req_out in enumerate(
@@ -252,6 +256,7 @@ def sample_logits(
                             process_and_write_sample,
                             req_out,
                             batch_input_ids[idx],
+                            batch_id[idx],
                             k,
                             compressor,
                             writer,

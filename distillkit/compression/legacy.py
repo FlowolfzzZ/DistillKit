@@ -81,12 +81,15 @@ class LogitCompressor:
             torch.Size([batch_size, seq_len, self.config.k]),
             int(self.vocab_index_bits),
         )
-        approx_logits = torch.sum(
-            self.X.to(coeffs.device, coeffs.dtype)
-            * coeffs.to(dtype=self.X.dtype).unsqueeze(-2),
-            dim=-1,
-        )
-        top_values = torch.cat([exact_values, approx_logits], dim=-1)
+        if self.config.exact_k < self.config.k:
+            approx_logits = torch.sum(
+                self.X.to(coeffs.device, coeffs.dtype)
+                * coeffs.to(dtype=self.X.dtype).unsqueeze(-2),
+                dim=-1,
+            )
+            top_values = torch.cat([exact_values, approx_logits], dim=-1)
+        else:
+            top_values = exact_values
         return top_indices, top_values
 
     def decompress(

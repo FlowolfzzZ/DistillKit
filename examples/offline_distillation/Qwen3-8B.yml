@@ -2,7 +2,7 @@ project_name: multi-teacher
 model: /ssd4/lizijian/Models/Qwen3-4B
 output_path: ./output/qwen3-4b-instruct-distill
 use_flash_attention: true
-sequence_length: 8192
+sequence_length: 4096
 model_kwargs:
   device_map: cuda:0
 
@@ -18,13 +18,15 @@ loss_functions:
   - function: kl
     weight: 0.5
     temperature: 2.0
+    missing_probability_handling: zero
+    sparse_chunk_length: 1024
 
 teachers:
   - kind: dataset
     legacy_logit_compression:
       vocab_size: 151669
       k: 128
-      exact_k: 32
+      exact_k: 128
       exact_dtype: bfloat16
       polynomial_degree: 8
       with_sqrt_term: false

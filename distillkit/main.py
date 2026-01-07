@@ -27,7 +27,7 @@ from distillkit.configuration import (
 from distillkit.hsd_mapping import HiddenStateMapping
 from distillkit.monkey_patch_packing import monkey_patch_packing_for_model
 from distillkit.signals import OfflineSignalSource, OnlineSignalSource, SignalSource
-from distillkit.trainer import DistillationTrainer
+from distillkit.trainer import DistillationTrainer, DistillationDataCollator
 
 LOG = logging.getLogger(__name__)
 
@@ -356,7 +356,11 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         else:
             hsm = None
         hsms.append(hsm)
-    
+
+    padding_free = config_kwargs.pop("padding_free", False)
+    packing = config_kwargs.pop("packing", False)
+    padding_free = padding_free or packing
+
     trainer = DistillationTrainer(
         model=model,
         config=config,
@@ -366,7 +370,8 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         train_dataset=ds_train,
         eval_dataset=ds_eval,
         args=training_arguments,
-        data_collator=collate_packed_batch if config.dataset.prepacked else None,
+        data_collator=collate_packed_batch if config.dataset.prepacked else DistillationDataCollator(pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
+                                                                                                     padding_free=padding_free),
         processing_class=None if config.dataset.prepacked else tokenizer,
     )
 

@@ -5,12 +5,14 @@ from transformers import (
     PreTrainedModel,
 )
 from trl import SFTTrainer
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
+from trl.trainer.utils import pad
+from typing import Any
 
 from distillkit.configuration import DistillationRunConfig, LossFunctionConfig
 from distillkit.hsd_mapping import HiddenStateMapping
 from distillkit.lossfuncs import ALL_LOSS_CLASSES, LossFunctionBase
-from distillkit.signals import OnlineSignalSource, SignalSource, TeacherSignal
-import copy
+from distillkit.signals import OnlineSignalSource, OfflineSignalSource, SignalSource, TeacherSignal, DenseSignal, SparseSignal
 
 
 def create_loss_func(cfg: LossFunctionConfig) -> LossFunctionBase:
@@ -126,13 +128,21 @@ class DistillationTrainer(SFTTrainer):
             )
             signals.append(signal)
 
+        if isinstance(signals[0], SparseSignal):
+            student_outputs.logits = student_outputs.logits[:, :-1, :]
+            valid_mask = valid_mask[:, :-1, :]
+
         losses = []
         loss_fns = []
         weights = []
         for i, signal in enumerate(signals):
             if signal.hidden_states is not None:
                 signal.hidden_states = tuple(hs.to(self.config.compute_device) for hs in signal.hidden_states)
-            signal.logits = signal.logits.to(self.config.compute_device)
+            if isinstance(signal, DenseSignal):
+                signal.logits = signal.logits.to(self.config.compute_device)
+            else:
+                signal.sparse_ids = signal.sparse_ids.to(self.config.compute_device)
+                signal.sparse_values = signal.sparse_values.to(self.config.compute_device)
             for j, loss_fn in enumerate(self.loss_functions):
                 cfg = self.config.loss_functions[j]
                 loss = loss_fn(
@@ -148,7 +158,11 @@ class DistillationTrainer(SFTTrainer):
             # recover
             if signal.hidden_states is not None:
                 signal.hidden_states = tuple(hs.to(self.model.device) for hs in signal.hidden_states)
-            signal.logits = signal.logits.to(self.model.device)
+            if isinstance(signal, DenseSignal):
+                signal.logits = signal.logits.to(self.model.device)
+            else:
+                signal.sparse_ids = signal.sparse_ids.to(self.model.device)
+                signal.sparse_values = signal.sparse_values.to(self.model.device)
             torch.cuda.empty_cache()
 
         total_loss = 0.0
@@ -162,3 +176,26 @@ class DistillationTrainer(SFTTrainer):
             }
         )
         return total_loss
+
+
+class DistillationDataCollator(DataCollatorForLanguageModeling):
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        batch = super().torch_call(examples)
+
+        if "id" in examples[0]:
+            batch["id"] = [example["id"] for example in examples]
+        if "packed_indices" in examples[0]:
+            packed_indices = [torch.tensor(example["packed_indices"]) for example in examples]
+            batch["packed_indices"] = pad(packed_indices,
+                                          padding_value=self.pad_token_id,
+                                          padding_side="right")
+        if "exact_values" in examples[0]:
+            exact_values = [torch.tensor(example["exact_values"]) for example in examples]
+            batch["exact_values"] = pad(exact_values,
+                                        padding_value=self.pad_token_id,
+                                        padding_side="right")
+        # Current implementation assumes using exact logits, so coeffs are absent
+        if "coeffs" in examples[0]:
+            batch["coeffs"] = torch.tensor([example["coeffs"] for example in examples])
+
+        return batch
