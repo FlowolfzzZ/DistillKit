@@ -1,0 +1,68 @@
+project_name: multi-teacher
+model: /ssd4/lizijian/Models/Qwen3-4B
+output_path: ./output/qwen3-4b-instruct-distill
+use_flash_attention: true
+sequence_length: 4096
+model_kwargs:
+  device_map: cuda:0
+
+dataset:
+  train_dataset:
+    repo_id: /ssd4/lizijian/Codes/DistillKit/output/Qwen3-8B+DeepSeek-R1-Distill-Qwen-32B
+    split: train
+  seed: 42
+
+loss_functions:
+  - function: cross_entropy
+    weight:
+      - teacher_name: Qwen3-8B
+        weight: 0.5
+      - teacher_name: DeepSeek-R1-Distill-Qwen-32B
+        weight: 0.6
+  - function: kl
+    weight:
+      - teacher_name: Qwen3-8B
+        weight: 0.5
+      - teacher_name: DeepSeek-R1-Distill-Qwen-32B
+        weight: 0.4
+    temperature: 2.0
+    missing_probability_handling: zero
+    sparse_chunk_length: 1024
+
+teachers:
+  - kind: dataset
+    legacy_logit_compression:
+      vocab_size: 151669
+      k: 128
+      exact_k: 128
+      exact_dtype: bfloat16
+      polynomial_degree: 8
+      with_sqrt_term: false
+      term_dtype: float32
+      invert_polynomial: true
+      residual_bins: []
+
+compute_device: cuda:0
+
+training_args:
+  dataset_text_field: text
+  num_train_epochs: 1
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 1
+  save_steps: 200
+  save_total_limit: 1
+  logging_steps: 1
+  learning_rate: 1.0e-5
+  weight_decay: 0.05
+  warmup_ratio: 0.025
+  lr_scheduler_type: cosine
+  bf16: true
+  max_grad_norm: 0.5
+  optim: paged_adamw_8bit
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+  report_to: wandb
+  push_to_hub: false
+  dataset_num_proc: 32
+  remove_unused_columns: false

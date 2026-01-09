@@ -207,6 +207,7 @@ def sample_logits(
             writer.write(
                 {
                     "id": id_sample,
+                    "teacher": model.split("/")[-1],
                     "input_ids": input_ids_sample,
                     "packed_indices": packed_indices_list,
                     "exact_values": exact_values_list,
@@ -224,6 +225,7 @@ def sample_logits(
             writer.write(
                 {
                     "id": id_sample,
+                    "teacher": model.split("/")[-1],
                     "input_ids": input_ids_sample,
                     "compressed_logprobs": compressed_logprobs_list,
                     "bytepacked_indices": bytepacked_indices_list,

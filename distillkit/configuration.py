@@ -27,12 +27,20 @@ class MissingProbabilityHandling(Enum):
     SYMMETRIC_UNIFORM = "symmetric_uniform"
 
 
+class TeacherSpecificWeight(BaseModel):
+    teacher_name: str
+    weight: float
+    
+    def to_dict(self) -> dict[str, float]:
+        return {self.teacher_name: self.weight}
+
+
 class LossFunctionConfig(BaseModel):
     function: LossFunction = Field(
         ...,
         description="Type of loss function to use.",
     )
-    weight: float = Field(
+    weight: float | list[TeacherSpecificWeight] = Field(
         ...,
         description="Weight for the loss function.",
     )

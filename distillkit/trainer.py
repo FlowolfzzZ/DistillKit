@@ -128,6 +128,7 @@ class DistillationTrainer(SFTTrainer):
             )
             signals.append(signal)
 
+        # vllm and hf inference produce different lengths of logits
         if isinstance(signals[0], SparseSignal):
             student_outputs.logits = student_outputs.logits[:, :-1, :]
             valid_mask = valid_mask[:, :-1, :]
@@ -145,16 +146,56 @@ class DistillationTrainer(SFTTrainer):
                 signal.sparse_values = signal.sparse_values.to(self.config.compute_device)
             for j, loss_fn in enumerate(self.loss_functions):
                 cfg = self.config.loss_functions[j]
-                loss = loss_fn(
-                    student_outputs,
-                    signal,
-                    mask=valid_mask,
-                    hidden_state_mapping=self.multi_hidden_state_mappings[i],
-                    num_items_in_batch=num_items_in_batch,
-                )
+                # teacher-specific weights
+                weight_dict = {}
+                # multi-teacher offline distillation
+                if isinstance(cfg.weight, list):
+                    for w in cfg.weight:
+                        weight_dict.update(w.to_dict())
+                    batch_size = inputs['input_ids'].shape[0]
+                    loss = torch.zeros((), device=self.config.compute_device)
+                    for k in range(batch_size):
+                        if inputs['teacher'][k] not in weight_dict:
+                            raise ValueError(f"Teacher name {inputs['teacher'][k]} not found in weight dict {weight_dict.keys()}")
+                        partial_student_outputs = student_outputs.__class__(
+                            logits=student_outputs.logits[k:k+1],
+                            loss=student_outputs.loss,
+                            hidden_states=student_outputs.hidden_states,
+                        )
+                        partial_signal = SparseSignal(
+                            sparse_ids=signal.sparse_ids[k:k+1],
+                            sparse_values=signal.sparse_values[k:k+1],
+                            log_values=signal.log_values,
+                            generation_temperature=signal.generation_temperature,
+                            hidden_states=signal.hidden_states,
+                            vocab_size=signal.vocab_size,
+                        )
+                        partial_loss = loss_fn(
+                            partial_student_outputs,
+                            partial_signal,
+                            mask=valid_mask[k:k+1],
+                            hidden_state_mapping=self.multi_hidden_state_mappings[i],
+                            num_items_in_batch=None,
+                        )
+                        loss += partial_loss * weight_dict[inputs['teacher'][k]]
+                    # 为了简化流程，这里假设每个教师的loss_function的weight总和都是1，没有考虑weight总和非1的情况
+                    loss = loss / batch_size
+                else:
+                    loss = loss_fn(
+                        student_outputs,
+                        signal,
+                        mask=valid_mask,
+                        hidden_state_mapping=self.multi_hidden_state_mappings[i],
+                        num_items_in_batch=num_items_in_batch,
+                    )
                 losses.append(loss)
                 loss_fns.append(cfg.function.value)
-                weights.append(cfg.weight)
+                if isinstance(cfg.weight, list):
+                    batch_size = inputs['input_ids'].shape[0]
+                    for k in range(batch_size):
+                        weights.append(weight_dict[inputs['teacher'][k]] / batch_size)
+                else:
+                    weights.append(cfg.weight)
             # recover
             if signal.hidden_states is not None:
                 signal.hidden_states = tuple(hs.to(self.model.device) for hs in signal.hidden_states)
@@ -167,7 +208,15 @@ class DistillationTrainer(SFTTrainer):
 
         total_loss = 0.0
         for loss, weight in zip(losses, weights):
-            total_loss += loss * weight
+            if isinstance(weight, list):
+                # teacher-specific weights
+                for w in weight:
+                    teacher_name = w.teacher_name
+                    teacher_weight = w.weight
+                    if inputs['teacher'][0] == teacher_name:
+                        total_loss += loss * teacher_weight
+            else:
+                total_loss += loss * weight
         total_loss = total_loss / sum(weights) / len(self.multi_signal_sources)
         self.log(
             {
@@ -184,6 +233,8 @@ class DistillationDataCollator(DataCollatorForLanguageModeling):
 
         if "id" in examples[0]:
             batch["id"] = [example["id"] for example in examples]
+        if "teacher" in examples[0]:
+            batch["teacher"] = [example["teacher"] for example in examples]
         if "packed_indices" in examples[0]:
             packed_indices = [torch.tensor(example["packed_indices"]) for example in examples]
             batch["packed_indices"] = pad(packed_indices,
