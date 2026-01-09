@@ -192,8 +192,8 @@ class DistillationTrainer(SFTTrainer):
                 loss_fns.append(cfg.function.value)
                 if isinstance(cfg.weight, list):
                     batch_size = inputs['input_ids'].shape[0]
-                    for k in range(batch_size):
-                        weights.append(weight_dict[inputs['teacher'][k]] / batch_size)
+                    teacher_weights = [weight_dict[inputs['teacher'][k]] for k in range(batch_size)]
+                    weights.append(sum(teacher_weights) / batch_size)
                 else:
                     weights.append(cfg.weight)
             # recover
@@ -208,15 +208,7 @@ class DistillationTrainer(SFTTrainer):
 
         total_loss = 0.0
         for loss, weight in zip(losses, weights):
-            if isinstance(weight, list):
-                # teacher-specific weights
-                for w in weight:
-                    teacher_name = w.teacher_name
-                    teacher_weight = w.weight
-                    if inputs['teacher'][0] == teacher_name:
-                        total_loss += loss * teacher_weight
-            else:
-                total_loss += loss * weight
+            total_loss += loss * weight
         total_loss = total_loss / sum(weights) / len(self.multi_signal_sources)
         self.log(
             {
