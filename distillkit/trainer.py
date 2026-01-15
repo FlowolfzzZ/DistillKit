@@ -152,34 +152,49 @@ class DistillationTrainer(SFTTrainer):
                 if isinstance(cfg.weight, list):
                     for w in cfg.weight:
                         weight_dict.update(w.to_dict())
-                    batch_size = inputs['input_ids'].shape[0]
-                    loss = torch.zeros((), device=self.config.compute_device)
-                    for k in range(batch_size):
-                        if inputs['teacher'][k] not in weight_dict:
-                            raise ValueError(f"Teacher name {inputs['teacher'][k]} not found in weight dict {weight_dict.keys()}")
-                        partial_student_outputs = student_outputs.__class__(
-                            logits=student_outputs.logits[k:k+1],
-                            loss=student_outputs.loss,
-                            hidden_states=student_outputs.hidden_states,
-                        )
-                        partial_signal = SparseSignal(
-                            sparse_ids=signal.sparse_ids[k:k+1],
-                            sparse_values=signal.sparse_values[k:k+1],
-                            log_values=signal.log_values,
-                            generation_temperature=signal.generation_temperature,
-                            hidden_states=signal.hidden_states,
-                            vocab_size=signal.vocab_size,
-                        )
-                        partial_loss = loss_fn(
-                            partial_student_outputs,
-                            partial_signal,
-                            mask=valid_mask[k:k+1],
+                    # offline distillation: weights decided by teacher column
+                    if "teacher" in inputs:
+                        batch_size = inputs['input_ids'].shape[0]
+                        loss = torch.zeros((), device=self.config.compute_device)
+                        for k in range(batch_size):
+                            teacher_name = inputs['teacher'][k]
+                            if teacher_name not in weight_dict:
+                                raise ValueError(f"Teacher name {teacher_name} not found in weight dict {weight_dict.keys()}")
+                            partial_student_outputs = student_outputs.__class__(
+                                logits=student_outputs.logits[k:k+1],
+                                loss=student_outputs.loss,
+                                hidden_states=student_outputs.hidden_states,
+                            )
+                            partial_signal = SparseSignal(
+                                sparse_ids=signal.sparse_ids[k:k+1],
+                                sparse_values=signal.sparse_values[k:k+1],
+                                log_values=signal.log_values,
+                                generation_temperature=signal.generation_temperature,
+                                hidden_states=signal.hidden_states,
+                                vocab_size=signal.vocab_size,
+                            )
+                            partial_loss = loss_fn(
+                                partial_student_outputs,
+                                partial_signal,
+                                mask=valid_mask[k:k+1],
+                                hidden_state_mapping=self.multi_hidden_state_mappings[i],
+                                num_items_in_batch=None,
+                            )
+                            loss += partial_loss * weight_dict[teacher_name]
+                        # 为了简化流程，这里假设每个教师的loss_function的weight总和都是1，没有考虑weight总和非1的情况
+                        loss = loss / batch_size
+                        weight_value = sum(weight_dict[inputs['teacher'][k]] for k in range(batch_size)) / batch_size
+                    else:
+                        # online distillation: fall back to teacher index ordering
+                        teacher_weights = [w.weight for w in cfg.weight]
+                        weight_value = teacher_weights[i] if i < len(teacher_weights) else sum(teacher_weights) / len(teacher_weights)
+                        loss = loss_fn(
+                            student_outputs,
+                            signal,
+                            mask=valid_mask,
                             hidden_state_mapping=self.multi_hidden_state_mappings[i],
-                            num_items_in_batch=None,
+                            num_items_in_batch=num_items_in_batch,
                         )
-                        loss += partial_loss * weight_dict[inputs['teacher'][k]]
-                    # 为了简化流程，这里假设每个教师的loss_function的weight总和都是1，没有考虑weight总和非1的情况
-                    loss = loss / batch_size
                 else:
                     loss = loss_fn(
                         student_outputs,
@@ -188,12 +203,11 @@ class DistillationTrainer(SFTTrainer):
                         hidden_state_mapping=self.multi_hidden_state_mappings[i],
                         num_items_in_batch=num_items_in_batch,
                     )
+                    weight_value = cfg.weight
                 losses.append(loss)
                 loss_fns.append(cfg.function.value)
                 if isinstance(cfg.weight, list):
-                    batch_size = inputs['input_ids'].shape[0]
-                    teacher_weights = [weight_dict[inputs['teacher'][k]] for k in range(batch_size)]
-                    weights.append(sum(teacher_weights) / batch_size)
+                    weights.append(weight_value)
                 else:
                     weights.append(cfg.weight)
             # recover
