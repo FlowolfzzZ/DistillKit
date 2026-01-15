@@ -8,12 +8,14 @@ from distillkit.lossfuncs.logistic_ranking import (
     LogisticRankingLoss,
     sparse_logistic_ranking_loss,
 )
+from distillkit.lossfuncs.mse import MSELoss, sparse_mse
 from distillkit.lossfuncs.tvd import TVDLoss, sparse_tvd
 
 ALL_LOSS_CLASSES = [
     KLDLoss,
     JSDLoss,
     TVDLoss,
+    MSELoss,
     HingeLoss,
     LogisticRankingLoss,
     HiddenStateCosineLoss,
@@ -25,12 +27,14 @@ __all__ = [
     "sparse_kl_div",
     "sparse_js_div",
     "sparse_tvd",
+    "sparse_mse",
     "sparse_hinge_loss",
     "sparse_logistic_ranking_loss",
     "MissingProbabilityHandling",
     "KLDLoss",
     "JSDLoss",
     "TVDLoss",
+    "MSELoss",
     "HingeLoss",
     "LogisticRankingLoss",
     "HiddenStateCosineLoss",

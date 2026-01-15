@@ -16,6 +16,7 @@ class LossFunction(str, Enum):
     KL = "kl"
     JSD = "jsd"
     TVD = "tvd"
+    MSE = "mse"
     HINGE = "hinge"
     LOGISTIC_RANKING = "logistic_ranking"
     HIDDEN_STATE_COSINE = "hs_cosine"
