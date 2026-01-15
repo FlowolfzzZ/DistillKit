@@ -66,6 +66,15 @@ def _format_row(
             example["messages"], tokenize=False, add_generation_prompt=False
         )
         return {"text": text}
+    elif "instruction" in example and "output" in example:
+        text = tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": example["instruction"]},
+                {"role": "assistant", "content": example["output"]},
+            ],
+            tokenize=False,
+        )
+        return {"text": text}
     else:
         raise RuntimeError("Expected `text`, `messages`, or `conversations` column")
 
