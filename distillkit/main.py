@@ -56,25 +56,22 @@ def _format_row(
                     {"role": role, "content": conversation.get("value", "")}
                 )
 
-        # Apply chat template to create a single string. SFTTrainer will handle tokenization.
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
-        )
-        return {"text": text}
+        # 保留结构化 messages，交给 SFTTrainer 生成 mask
+        return {"messages": messages}
     elif "messages" in example:
-        text = tokenizer.apply_chat_template(
-            example["messages"], tokenize=False, add_generation_prompt=False
-        )
-        return {"text": text}
+        # 直接透传 messages，便于 assistant_only/completion_only 相关 mask
+        return {"messages": example["messages"]}
     elif "instruction" in example and "output" in example:
-        text = tokenizer.apply_chat_template(
-            [
-                {"role": "user", "content": example["instruction"]},
-                {"role": "assistant", "content": example["output"]},
-            ],
+        # Keep prompt/completion分开，方便 TRL 生成 completion_mask
+        prompt = tokenizer.apply_chat_template(
+            [{"role": "user", "content": example["instruction"]}],
             tokenize=False,
+            add_generation_prompt=True,
         )
-        return {"text": text}
+        return {
+            "prompt": prompt,
+            "completion": example["output"],
+        }
     else:
         raise RuntimeError("Expected `text`, `messages`, or `conversations` column")
 
@@ -332,6 +329,9 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     model = load_student_model(config, tokenizer_vocab_size)
 
     config_kwargs = dict(config.training_args)
+    if config.completion_only_loss is not None:
+        # Allow YAML to override completion_only_loss explicitly
+        config_kwargs["completion_only_loss"] = config.completion_only_loss
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})
     if config.dataset.prepacked:
         dataset_kwargs["skip_prepare_dataset"] = True
@@ -341,6 +341,10 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         max_length=max_length,
         output_dir=config.output_path,
         dataset_kwargs=dataset_kwargs,
+    )
+    LOG.info(
+        "Using completion_only_loss=%s (from config/training_args)",
+        training_arguments.completion_only_loss,
     )
 
     multi_signal_sources = create_multi_signal_sources(config, tokenizer_vocab_size)
