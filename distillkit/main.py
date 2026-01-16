@@ -332,7 +332,11 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     if config.completion_only_loss is not None:
         # Allow YAML to override completion_only_loss explicitly
         config_kwargs["completion_only_loss"] = config.completion_only_loss
+    response_template = config_kwargs.pop("response_template", None)
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})
+    if response_template:
+        # Older TRL versions don't accept response_template directly; pass via dataset_kwargs
+        dataset_kwargs["response_template"] = response_template
     if config.dataset.prepacked:
         dataset_kwargs["skip_prepare_dataset"] = True
     max_length = config_kwargs.pop("max_length", config.sequence_length)
@@ -346,7 +350,6 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         "Using completion_only_loss=%s (from config/training_args)",
         training_arguments.completion_only_loss,
     )
-
     multi_signal_sources = create_multi_signal_sources(config, tokenizer_vocab_size)
     hsms = []
     for signal_source in multi_signal_sources:
@@ -373,7 +376,6 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     padding_free = config_kwargs.pop("padding_free", False)
     packing = config_kwargs.pop("packing", False)
     padding_free = padding_free or packing
-
     trainer = DistillationTrainer(
         model=model,
         config=config,
@@ -383,11 +385,15 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         train_dataset=ds_train,
         eval_dataset=ds_eval,
         args=training_arguments,
-        data_collator=collate_packed_batch if config.dataset.prepacked else DistillationDataCollator(pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
-                                                                                                     padding_free=padding_free),
+        data_collator=collate_packed_batch
+        if config.dataset.prepacked
+        else DistillationDataCollator(
+            pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
+            padding_free=padding_free,
+            completion_only_loss=training_arguments.completion_only_loss,
+        ),
         processing_class=None if config.dataset.prepacked else tokenizer,
     )
-
     resume_from_checkpoint = config.training_args.get("resume_from_checkpoint", None)
 
     LOG.info("Starting training.")
