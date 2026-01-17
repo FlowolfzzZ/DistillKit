@@ -33,7 +33,9 @@ LOG = logging.getLogger(__name__)
 
 
 def _format_row(
-    example: dict[str, Any], tokenizer: transformers.PreTrainedTokenizer
+    example: dict[str, Any],
+    tokenizer: transformers.PreTrainedTokenizer,
+    enable_thinking: bool | None = True,
 ) -> dict[str, Any]:
     if ("input_ids" in example) or ("text" in example):
         # either pretokenized or raw completion - no formatting needed
@@ -63,10 +65,15 @@ def _format_row(
         return {"messages": example["messages"]}
     elif "instruction" in example and "output" in example:
         # Keep prompt/completion分开，方便 TRL 生成 completion_mask
+        chat_kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+        if enable_thinking is not None:
+            chat_kwargs["enable_thinking"] = enable_thinking
         prompt = tokenizer.apply_chat_template(
             [{"role": "user", "content": example["instruction"]}],
-            tokenize=False,
-            add_generation_prompt=True,
+            **chat_kwargs,
         )
         return {
             "prompt": prompt,
@@ -84,6 +91,7 @@ def _load_dataset(
     prepared_dataset_path: str | None = None,
     keep_in_memory: bool | None = None,
     prepacked: bool = False,
+    enable_thinking: bool | None = None,
 ) -> datasets.Dataset:
     if prepared_dataset_path:
         honk = json.dumps(
@@ -143,7 +151,7 @@ def _load_dataset(
         res = res.map(
             _format_row,
             remove_columns=res.column_names,
-            fn_kwargs={"tokenizer": tokenizer},
+            fn_kwargs={"tokenizer": tokenizer, "enable_thinking": enable_thinking},
         )
     if full_prepared_path:
         os.makedirs(full_prepared_path, exist_ok=True)
@@ -162,6 +170,7 @@ def load_data(
     config: DatasetConfiguration,
     tokenizer: transformers.PreTrainedTokenizer,
     keep_in_memory: bool | None = None,
+    enable_thinking: bool | None = None,
 ) -> tuple[datasets.Dataset, datasets.Dataset | None]:
     """
     Load the train (and optionally eval) datasets as specified in the configuration.
@@ -178,6 +187,7 @@ def load_data(
         prepared_dataset_path=config.prepared_dataset_path,
         keep_in_memory=keep_in_memory,
         prepacked=config.prepacked,
+        enable_thinking=enable_thinking,
     )
     ds_eval = None
     if config.eval_dataset:
@@ -189,6 +199,7 @@ def load_data(
             prepared_dataset_path=config.prepared_dataset_path,
             keep_in_memory=keep_in_memory,
             prepacked=config.prepacked,
+            enable_thinking=enable_thinking,
         )
     return ds_train, ds_eval
 
@@ -319,7 +330,10 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     accelerator = Accelerator()
     with accelerator.main_process_first():
         tokenizer = load_tokenizer(config)
-        ds_train, ds_eval = load_data(config.dataset, tokenizer)
+        enable_thinking = config.training_args.get("enable_thinking", None)
+        ds_train, ds_eval = load_data(
+            config.dataset, tokenizer, enable_thinking=enable_thinking
+        )
 
         tokenizer_vocab_size = max(
             len(tokenizer.get_vocab()),
@@ -334,6 +348,7 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         config_kwargs["completion_only_loss"] = config.completion_only_loss
     response_template = config_kwargs.pop("response_template", None)
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})
+    breakpoint()
     if response_template:
         # Older TRL versions don't accept response_template directly; pass via dataset_kwargs
         dataset_kwargs["response_template"] = response_template
