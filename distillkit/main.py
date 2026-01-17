@@ -33,7 +33,9 @@ LOG = logging.getLogger(__name__)
 
 
 def _format_row(
-    example: dict[str, Any], tokenizer: transformers.PreTrainedTokenizer
+    example: dict[str, Any],
+    tokenizer: transformers.PreTrainedTokenizer,
+    enable_thinking: bool | None = True,
 ) -> dict[str, Any]:
     if ("input_ids" in example) or ("text" in example):
         # either pretokenized or raw completion - no formatting needed
@@ -56,16 +58,27 @@ def _format_row(
                     {"role": role, "content": conversation.get("value", "")}
                 )
 
-        # Apply chat template to create a single string. SFTTrainer will handle tokenization.
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
-        )
-        return {"text": text}
+        # 保留结构化 messages，交给 SFTTrainer 生成 mask
+        return {"messages": messages}
     elif "messages" in example:
-        text = tokenizer.apply_chat_template(
-            example["messages"], tokenize=False, add_generation_prompt=False
+        # 直接透传 messages，便于 assistant_only/completion_only 相关 mask
+        return {"messages": example["messages"]}
+    elif "instruction" in example and "output" in example:
+        # Keep prompt/completion分开，方便 TRL 生成 completion_mask
+        chat_kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+        if enable_thinking is not None:
+            chat_kwargs["enable_thinking"] = enable_thinking
+        prompt = tokenizer.apply_chat_template(
+            [{"role": "user", "content": example["instruction"]}],
+            **chat_kwargs,
         )
-        return {"text": text}
+        return {
+            "prompt": prompt,
+            "completion": example["output"],
+        }
     else:
         raise RuntimeError("Expected `text`, `messages`, or `conversations` column")
 
@@ -78,6 +91,7 @@ def _load_dataset(
     prepared_dataset_path: str | None = None,
     keep_in_memory: bool | None = None,
     prepacked: bool = False,
+    enable_thinking: bool | None = None,
 ) -> datasets.Dataset:
     if prepared_dataset_path:
         honk = json.dumps(
@@ -137,7 +151,7 @@ def _load_dataset(
         res = res.map(
             _format_row,
             remove_columns=res.column_names,
-            fn_kwargs={"tokenizer": tokenizer},
+            fn_kwargs={"tokenizer": tokenizer, "enable_thinking": enable_thinking},
         )
     if full_prepared_path:
         os.makedirs(full_prepared_path, exist_ok=True)
@@ -156,6 +170,7 @@ def load_data(
     config: DatasetConfiguration,
     tokenizer: transformers.PreTrainedTokenizer,
     keep_in_memory: bool | None = None,
+    enable_thinking: bool | None = None,
 ) -> tuple[datasets.Dataset, datasets.Dataset | None]:
     """
     Load the train (and optionally eval) datasets as specified in the configuration.
@@ -172,6 +187,7 @@ def load_data(
         prepared_dataset_path=config.prepared_dataset_path,
         keep_in_memory=keep_in_memory,
         prepacked=config.prepacked,
+        enable_thinking=enable_thinking,
     )
     ds_eval = None
     if config.eval_dataset:
@@ -183,6 +199,7 @@ def load_data(
             prepared_dataset_path=config.prepared_dataset_path,
             keep_in_memory=keep_in_memory,
             prepacked=config.prepacked,
+            enable_thinking=enable_thinking,
         )
     return ds_train, ds_eval
 
@@ -313,7 +330,10 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     accelerator = Accelerator()
     with accelerator.main_process_first():
         tokenizer = load_tokenizer(config)
-        ds_train, ds_eval = load_data(config.dataset, tokenizer)
+        enable_thinking = config.training_args.get("enable_thinking", None)
+        ds_train, ds_eval = load_data(
+            config.dataset, tokenizer, enable_thinking=enable_thinking
+        )
 
         tokenizer_vocab_size = max(
             len(tokenizer.get_vocab()),
@@ -323,7 +343,15 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     model = load_student_model(config, tokenizer_vocab_size)
 
     config_kwargs = dict(config.training_args)
+    if config.completion_only_loss is not None:
+        # Allow YAML to override completion_only_loss explicitly
+        config_kwargs["completion_only_loss"] = config.completion_only_loss
+    response_template = config_kwargs.pop("response_template", None)
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})
+    breakpoint()
+    if response_template:
+        # Older TRL versions don't accept response_template directly; pass via dataset_kwargs
+        dataset_kwargs["response_template"] = response_template
     if config.dataset.prepacked:
         dataset_kwargs["skip_prepare_dataset"] = True
     max_length = config_kwargs.pop("max_length", config.sequence_length)
@@ -333,7 +361,10 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         output_dir=config.output_path,
         dataset_kwargs=dataset_kwargs,
     )
-
+    LOG.info(
+        "Using completion_only_loss=%s (from config/training_args)",
+        training_arguments.completion_only_loss,
+    )
     multi_signal_sources = create_multi_signal_sources(config, tokenizer_vocab_size)
     hsms = []
     for signal_source in multi_signal_sources:
@@ -360,7 +391,6 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     padding_free = config_kwargs.pop("padding_free", False)
     packing = config_kwargs.pop("packing", False)
     padding_free = padding_free or packing
-
     trainer = DistillationTrainer(
         model=model,
         config=config,
@@ -370,11 +400,15 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         train_dataset=ds_train,
         eval_dataset=ds_eval,
         args=training_arguments,
-        data_collator=collate_packed_batch if config.dataset.prepacked else DistillationDataCollator(pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
-                                                                                                     padding_free=padding_free),
+        data_collator=collate_packed_batch
+        if config.dataset.prepacked
+        else DistillationDataCollator(
+            pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
+            padding_free=padding_free,
+            completion_only_loss=training_arguments.completion_only_loss,
+        ),
         processing_class=None if config.dataset.prepacked else tokenizer,
     )
-
     resume_from_checkpoint = config.training_args.get("resume_from_checkpoint", None)
 
     LOG.info("Starting training.")

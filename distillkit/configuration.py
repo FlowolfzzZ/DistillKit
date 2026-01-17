@@ -207,6 +207,10 @@ class DistillationRunConfig(BaseModel):
         default=False,
         description="Use functionary's packing code. Requires flash attention and may not be compatible with all models.",
     )
+    completion_only_loss: bool = Field(
+        default=False,
+        description="When set, override Trainer completion_only_loss to train only on assistant completions.",
+    )
     training_args: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional arguments for the trainer.",

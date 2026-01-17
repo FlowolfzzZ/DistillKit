@@ -1,0 +1,57 @@
+project_name: single-teacher
+model: /ssd4/hyzhang/MODELS/Qwen/Qwen3-4B-Instruct-2507
+output_path: /ssd4/hyzhang/Kit/distill_models/qwen3-32B-to-qwen3-4b-v2.1-full-loss
+use_flash_attention: true
+completion_only_loss: false
+sequence_length: 4096
+model_kwargs:
+  device_map: auto
+
+dataset:
+  train_dataset:
+    repo_id: /ssd4/hyzhang/Kit/OpenThoughts-114k/processed_metadata_v2
+    split: train
+  seed: 42
+
+loss_functions:
+  - function: cross_entropy
+    weight: 0.5
+  - function: kl
+    weight: 0.5
+    temperature: 2.0
+
+teachers:
+  - kind: hf
+    path: /ssd4/hyzhang/MODELS/Qwen/Qwen3-32B
+    kwargs:
+      attn_implementation: flash_attention_2
+      torch_dtype: bfloat16
+      device_map: cuda:1
+
+compute_device: cuda:0
+
+training_args:
+  run_name: qwen3-32B-to-qwen3-4b-v2-full-loss
+  dataset_text_field: text
+  packing: true
+  packing_strategy: wrapped
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 4
+  save_steps: 200
+  save_total_limit: 5
+  logging_steps: 1
+  learning_rate: 1.0e-5
+  weight_decay: 0.05
+  warmup_ratio: 0.025
+  lr_scheduler_type: cosine
+  bf16: true
+  max_grad_norm: 0.5
+  optim: paged_adamw_8bit
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+  report_to: none
+  push_to_hub: false
+  dataset_num_proc: 32
+  response_template: "<|im_start|>assistant\n"

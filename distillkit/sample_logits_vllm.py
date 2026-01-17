@@ -122,7 +122,6 @@ def sample_logits(
         os.path.join(output, "compression_config.yml"), "w", encoding="utf-8"
     ) as f:
         yaml.safe_dump(cfg.model_dump(mode="json"), f)
-
     logging.info(f"Loading and preprocessing data from {dataset} ({split})")
     ds = load_preprocess_data(
         dataset=dataset,
@@ -135,6 +134,12 @@ def sample_logits(
         add_extra_pad_token=True,
         apply_chat_template=apply_chat_template,
     )
+
+    # 打印第一条模板化的样本
+    first = ds[0]
+    raw_text = first.get("text")  
+    decoded = tok.decode(first["input_ids"], skip_special_tokens=False)
+    logging.info(f"First sample id={first.get('id','N/A')}\nraw_text={raw_text}\nprompt={decoded}")
 
     llm = vllm.LLM(
         model=model,
