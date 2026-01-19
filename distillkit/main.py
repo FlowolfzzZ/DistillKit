@@ -274,14 +274,22 @@ def create_signal_source(
             config=teacher_config.logprob_compressor,
             legacy_config=teacher_config.legacy_logit_compression,
         )
-        return OfflineSignalSource(compressor, vocab_size=vocab_size)
+        source = OfflineSignalSource(compressor, vocab_size=vocab_size)
+        setattr(source, "name", getattr(teacher_config, "name", None))
+        return source
     elif isinstance(teacher_config, TeacherModelConfig):
         teacher_model = transformers.AutoModelForCausalLM.from_pretrained(
             teacher_config.path, **(teacher_config.kwargs or {})
         )
-        return OnlineSignalSource(
+        source = OnlineSignalSource(
             teacher_model, vocab_size=vocab_size, sparsify_top_k=teacher_config.top_k
         )
+        setattr(
+            source,
+            "name",
+            teacher_config.name or teacher_config.path.rstrip("/").split("/")[-1],
+        )
+        return source
     else:
         raise RuntimeError("Teacher configuration invalid")
 

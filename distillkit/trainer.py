@@ -53,6 +53,12 @@ class DistillationTrainer(SFTTrainer):
 
         self.multi_signal_sources = multi_signal_sources
         self.multi_hidden_state_mappings = multi_hidden_state_mappings
+        self.teacher_names = []
+        for idx, ss in enumerate(self.multi_signal_sources):
+            name = getattr(ss, "name", None)
+            if not name:
+                name = f"teacher{idx + 1}"
+            self.teacher_names.append(name)
 
         if self.need_hidden_states and not any(
             ss.supports_hidden_states() for ss in self.multi_signal_sources
@@ -140,6 +146,7 @@ class DistillationTrainer(SFTTrainer):
         losses = []
         loss_fns = []
         weights = []
+        loss_teacher_indices = []
         for i, signal in enumerate(signals):
             if signal.hidden_states is not None:
                 signal.hidden_states = tuple(hs.to(self.config.compute_device) for hs in signal.hidden_states)
@@ -214,6 +221,7 @@ class DistillationTrainer(SFTTrainer):
                     weights.append(weight_value)
                 else:
                     weights.append(cfg.weight)
+                loss_teacher_indices.append(i)
             # recover
             if signal.hidden_states is not None:
                 signal.hidden_states = tuple(hs.to(self.model.device) for hs in signal.hidden_states)
@@ -251,12 +259,13 @@ class DistillationTrainer(SFTTrainer):
                 is_main = dist.get_rank() == 0
 
             if is_main:
-                self.log(
-                    {
-                        f"distillation_loss/{idx + 1}_{loss_fn}": val.item()
-                        for idx, (val, loss_fn) in enumerate(zip(avg_losses, loss_fns))
-                    }
-                )
+                log_dict = {}
+                for idx, (val, loss_fn, teacher_idx) in enumerate(zip(avg_losses, loss_fns, loss_teacher_indices)):
+                    teacher_name = self.teacher_names[teacher_idx] if teacher_idx < len(self.teacher_names) else f"teacher{teacher_idx + 1}"
+                    log_key = f"distillation_loss/{loss_fn}/{teacher_name}"
+                    log_dict[log_key] = val.item()
+                if log_dict:
+                    self.log(log_dict)
 
             # 重置累计
             self._distill_accum_losses.zero_()
