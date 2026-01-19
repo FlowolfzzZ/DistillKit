@@ -330,9 +330,8 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     accelerator = Accelerator()
     with accelerator.main_process_first():
         tokenizer = load_tokenizer(config)
-        enable_thinking = config.training_args.get("enable_thinking", None)
         ds_train, ds_eval = load_data(
-            config.dataset, tokenizer, enable_thinking=enable_thinking
+            config.dataset, tokenizer, enable_thinking=config.training_args.get("enable_thinking", None)
         )
 
         tokenizer_vocab_size = max(
@@ -343,12 +342,12 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     model = load_student_model(config, tokenizer_vocab_size)
 
     config_kwargs = dict(config.training_args)
+    enable_thinking = config_kwargs.pop("enable_thinking", None)
     if config.completion_only_loss is not None:
         # Allow YAML to override completion_only_loss explicitly
         config_kwargs["completion_only_loss"] = config.completion_only_loss
     response_template = config_kwargs.pop("response_template", None)
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})
-    breakpoint()
     if response_template:
         # Older TRL versions don't accept response_template directly; pass via dataset_kwargs
         dataset_kwargs["response_template"] = response_template

@@ -1,6 +1,7 @@
 # Copyright 2024 Charles O. Goddard
 
 import torch
+import torch.distributed as dist
 from transformers import (
     PreTrainedModel,
 )
@@ -38,6 +39,9 @@ class DistillationTrainer(SFTTrainer):
         super().__init__(model, *args, **kwargs)
         self.true_vocab_size = true_vocab_size
         self.config = config
+        # 用于累积多步的 distillation loss，避免梯度累计时重复上报同一个 global_step
+        self._distill_accum_losses = None
+        self._distill_micro_step = 0
 
         if self.config.compute_device is None:
             self.config.compute_device = self.model.device
@@ -224,12 +228,39 @@ class DistillationTrainer(SFTTrainer):
         for loss, weight in zip(losses, weights):
             total_loss += loss * weight
         total_loss = total_loss / sum(weights) / len(self.multi_signal_sources)
-        self.log(
-            {
-                f"distillation_loss/{idx + 1}_{loss_fn}": loss.item()
-                for idx, (loss, loss_fn) in enumerate(zip(losses, loss_fns))
-            }
-        )
+
+        # 累计若干 micro-batch 后再在主进程上报一次，避免 wandb 同一 global_step 记录多值
+        device_for_logs = student_outputs.logits.device
+        log_losses = torch.tensor([loss.item() for loss in losses], device=device_for_logs)
+        if self._distill_accum_losses is None:
+            self._distill_accum_losses = torch.zeros_like(log_losses)
+            self._distill_micro_step = 0
+        self._distill_accum_losses += log_losses
+        self._distill_micro_step += 1
+
+        should_log = self._distill_micro_step >= self.args.gradient_accumulation_steps
+        if should_log:
+            # 当前进程的平均
+            avg_losses = self._distill_accum_losses / float(self._distill_micro_step)
+
+            # 多机/多卡同步平均
+            is_main = True
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(avg_losses, op=dist.ReduceOp.SUM)
+                avg_losses = avg_losses / dist.get_world_size()
+                is_main = dist.get_rank() == 0
+
+            if is_main:
+                self.log(
+                    {
+                        f"distillation_loss/{idx + 1}_{loss_fn}": val.item()
+                        for idx, (val, loss_fn) in enumerate(zip(avg_losses, loss_fns))
+                    }
+                )
+
+            # 重置累计
+            self._distill_accum_losses.zero_()
+            self._distill_micro_step = 0
         return total_loss
 
 
