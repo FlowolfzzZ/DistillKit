@@ -39,8 +39,8 @@ from distillkit.compression.config import (
 @click.option("--seed", type=int, default=42)
 @click.option("--tokenizer", type=str, default=None)
 @click.option("--apply-chat-template/--no-apply-chat-template", default=False)
-@click.option("--max-seq-len", type=int, default=1024)
-@click.option("--max-model-len", type=int, default=None)
+@click.option("--max-seq-len", type=int, default=2048)
+@click.option("--max-model-len", type=int, default=8192)
 @click.option("--tensor-parallel-size", type=int, default=1)
 @click.option("--pipeline-parallel-size", type=int, default=1)
 @click.option(
@@ -211,7 +211,7 @@ def sample_logits(
 
             writer.write(
                 {
-                    "id": id_sample,
+                    "id": str(id_sample),
                     "teacher": model.split("/")[-1],
                     "input_ids": input_ids_sample,
                     "packed_indices": packed_indices_list,
@@ -229,7 +229,7 @@ def sample_logits(
 
             writer.write(
                 {
-                    "id": id_sample,
+                    "id": str(id_sample),
                     "teacher": model.split("/")[-1],
                     "input_ids": input_ids_sample,
                     "compressed_logprobs": compressed_logprobs_list,
@@ -250,7 +250,9 @@ def sample_logits(
                 for i0 in tqdm.tqdm(
                     range(0, len(ds), macrobatch_size), desc="Logit Batches"
                 ):
-                    batch_id = ds[i0 : i0 + macrobatch_size]["id"]
+                    batch_id_raw = ds[i0 : i0 + macrobatch_size]["id"]
+                    # 自动将 id 转成字符串，兼容 int/np.int64 等类型
+                    batch_id = [str(x) for x in batch_id_raw]
                     batch_input_ids = ds[i0 : i0 + macrobatch_size]["input_ids"]
                     # Submit CPU processing tasks to background thread
                     for idx, req_out in enumerate(

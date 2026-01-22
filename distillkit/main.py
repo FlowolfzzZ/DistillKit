@@ -398,6 +398,17 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     padding_free = config_kwargs.pop("padding_free", False)
     packing = config_kwargs.pop("packing", False)
     padding_free = padding_free or packing
+    # 选择 collator：completion_only_loss + response_template 时用 TRL 的掩码版
+    data_collator = (
+        collate_packed_batch
+        if config.dataset.prepacked
+        else DistillationDataCollator(
+            pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
+            padding_free=padding_free,
+            completion_only_loss=training_arguments.completion_only_loss,
+        )
+    )
+
     trainer = DistillationTrainer(
         model=model,
         config=config,
@@ -407,13 +418,7 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         train_dataset=ds_train,
         eval_dataset=ds_eval,
         args=training_arguments,
-        data_collator=collate_packed_batch
-        if config.dataset.prepacked
-        else DistillationDataCollator(
-            pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
-            padding_free=padding_free,
-            completion_only_loss=training_arguments.completion_only_loss,
-        ),
+        data_collator=data_collator,
         processing_class=None if config.dataset.prepacked else tokenizer,
     )
     resume_from_checkpoint = config.training_args.get("resume_from_checkpoint", None)
