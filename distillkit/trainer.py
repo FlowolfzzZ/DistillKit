@@ -291,8 +291,7 @@ class DistillationTrainer(SFTTrainer):
                         log_dict[f"distillation_loss_raw/{loss_fn}/{teacher_name}"] = entry["loss_sum"] / entry["count"]
                 # 加权后（顶层权重之前）的多教师 loss，按信号源 index 记录
                 for idx, (val, loss_fn, teacher_idx) in enumerate(zip(avg_losses, loss_fns, loss_teacher_indices)):
-                    teacher_name = self.teacher_names[teacher_idx] if teacher_idx < len(self.teacher_names) else f"teacher{teacher_idx + 1}"
-                    log_key = f"distillation_loss/{loss_fn}/{teacher_name}"
+                    log_key = f"distillation_loss/{loss_fn}/total"
                     log_dict[log_key] = val.item()
                 if log_dict:
                     self.log(log_dict)
