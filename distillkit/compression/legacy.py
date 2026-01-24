@@ -101,7 +101,12 @@ class LogitCompressor:
         top_indices, top_values = self.decompress_to_sparse(
             packed_indices, exact_values, coeffs
         )
-        return densify(top_indices, top_values, self.config.vocab_size)
+        return densify(
+            top_indices,
+            top_values,
+            self.config.vocab_size,
+            renormalize=True,
+        )
 
     @staticmethod
     def _solve_least_squares(A, B):
