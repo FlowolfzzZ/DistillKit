@@ -131,6 +131,10 @@ class DatasetConfiguration(BaseModel):
 class TeacherModelConfig(BaseModel):
     kind: Literal["hf"] = "hf"
 
+    name: str | None = Field(
+        default=None,
+        description="Optional name for the teacher model, used for logging.",
+    )
     path: str
     kwargs: dict[str, Any] | None = None
 

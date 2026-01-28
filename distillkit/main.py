@@ -274,14 +274,22 @@ def create_signal_source(
             config=teacher_config.logprob_compressor,
             legacy_config=teacher_config.legacy_logit_compression,
         )
-        return OfflineSignalSource(compressor, vocab_size=vocab_size)
+        source = OfflineSignalSource(compressor, vocab_size=vocab_size)
+        setattr(source, "name", getattr(teacher_config, "name", None))
+        return source
     elif isinstance(teacher_config, TeacherModelConfig):
         teacher_model = transformers.AutoModelForCausalLM.from_pretrained(
             teacher_config.path, **(teacher_config.kwargs or {})
         )
-        return OnlineSignalSource(
+        source = OnlineSignalSource(
             teacher_model, vocab_size=vocab_size, sparsify_top_k=teacher_config.top_k
         )
+        setattr(
+            source,
+            "name",
+            teacher_config.name or teacher_config.path.rstrip("/").split("/")[-1],
+        )
+        return source
     else:
         raise RuntimeError("Teacher configuration invalid")
 
@@ -330,9 +338,8 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     accelerator = Accelerator()
     with accelerator.main_process_first():
         tokenizer = load_tokenizer(config)
-        enable_thinking = config.training_args.get("enable_thinking", None)
         ds_train, ds_eval = load_data(
-            config.dataset, tokenizer, enable_thinking=enable_thinking
+            config.dataset, tokenizer, enable_thinking=config.training_args.get("enable_thinking", None)
         )
 
         tokenizer_vocab_size = max(
@@ -343,12 +350,12 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     model = load_student_model(config, tokenizer_vocab_size)
 
     config_kwargs = dict(config.training_args)
+    enable_thinking = config_kwargs.pop("enable_thinking", None)
     if config.completion_only_loss is not None:
         # Allow YAML to override completion_only_loss explicitly
         config_kwargs["completion_only_loss"] = config.completion_only_loss
     response_template = config_kwargs.pop("response_template", None)
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})
-    breakpoint()
     if response_template:
         # Older TRL versions don't accept response_template directly; pass via dataset_kwargs
         dataset_kwargs["response_template"] = response_template
@@ -391,6 +398,17 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     padding_free = config_kwargs.pop("padding_free", False)
     packing = config_kwargs.pop("packing", False)
     padding_free = padding_free or packing
+    # 选择 collator：completion_only_loss + response_template 时用 TRL 的掩码版
+    data_collator = (
+        collate_packed_batch
+        if config.dataset.prepacked
+        else DistillationDataCollator(
+            pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
+            padding_free=padding_free,
+            completion_only_loss=training_arguments.completion_only_loss,
+        )
+    )
+
     trainer = DistillationTrainer(
         model=model,
         config=config,
@@ -400,13 +418,7 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
         train_dataset=ds_train,
         eval_dataset=ds_eval,
         args=training_arguments,
-        data_collator=collate_packed_batch
-        if config.dataset.prepacked
-        else DistillationDataCollator(
-            pad_token_id=tokenizer.convert_tokens_to_ids(tokenizer.pad_token),
-            padding_free=padding_free,
-            completion_only_loss=training_arguments.completion_only_loss,
-        ),
+        data_collator=data_collator,
         processing_class=None if config.dataset.prepacked else tokenizer,
     )
     resume_from_checkpoint = config.training_args.get("resume_from_checkpoint", None)

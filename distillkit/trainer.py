@@ -1,6 +1,7 @@
 # Copyright 2024 Charles O. Goddard
 
 import torch
+import torch.distributed as dist
 from transformers import (
     PreTrainedModel,
 )
@@ -38,6 +39,9 @@ class DistillationTrainer(SFTTrainer):
         super().__init__(model, *args, **kwargs)
         self.true_vocab_size = true_vocab_size
         self.config = config
+        # 用于累积多步的 distillation loss，避免梯度累计时重复上报同一个 global_step
+        self._distill_accum_losses = None
+        self._distill_micro_step = 0
 
         if self.config.compute_device is None:
             self.config.compute_device = self.model.device
@@ -49,6 +53,15 @@ class DistillationTrainer(SFTTrainer):
 
         self.multi_signal_sources = multi_signal_sources
         self.multi_hidden_state_mappings = multi_hidden_state_mappings
+        self.teacher_names = []
+        for idx, ss in enumerate(self.multi_signal_sources):
+            name = getattr(ss, "name", None)
+            if not name:
+                name = f"teacher{idx + 1}"
+            self.teacher_names.append(name)
+        # 记录离线多教师逐教师的 loss，用于日志
+        self._per_teacher_accum = {}  # key: (loss_fn, teacher) -> {"loss_sum": float, "count": int}
+        self._last_per_teacher_logs = []
 
         if self.need_hidden_states and not any(
             ss.supports_hidden_states() for ss in self.multi_signal_sources
@@ -80,7 +93,6 @@ class DistillationTrainer(SFTTrainer):
                 inputs["labels"][inputs["labels"] == tok_id] = (
                     self.model.config.eos_token_id
                 )
-
         student_model = model.module if hasattr(model, "module") else model
         student_outputs = student_model(
             **{
@@ -108,6 +120,15 @@ class DistillationTrainer(SFTTrainer):
             student_outputs.hidden_states = tuple(hs.to(student_model.device) for hs in student_outputs.hidden_states)
         torch.cuda.empty_cache()
         
+        # 保存本步逐教师原始 loss（未乘顶层 weight）以便日志
+        step_teacher_logs = getattr(self, "_last_per_teacher_logs", [])
+        for loss_fn, teacher_name, mean_val, count in step_teacher_logs:
+            key = (loss_fn, teacher_name)
+            entry = self._per_teacher_accum.get(key, {"loss_sum": 0.0, "count": 0})
+            entry["loss_sum"] += mean_val * count
+            entry["count"] += count
+            self._per_teacher_accum[key] = entry
+
         return (total_loss, student_outputs) if return_outputs else total_loss
 
     def total_distillation_loss(
@@ -127,6 +148,8 @@ class DistillationTrainer(SFTTrainer):
                 return_hidden_states=self.need_hidden_states,
             )
             signals.append(signal)
+        # 存储逐教师原始 loss（未乘顶层 weight），用于日志
+        per_teacher_logs: list[tuple[str, str, float, int]] = []
 
         # vllm and hf inference produce different lengths of logits
         if isinstance(signals[0], SparseSignal):
@@ -136,6 +159,7 @@ class DistillationTrainer(SFTTrainer):
         losses = []
         loss_fns = []
         weights = []
+        loss_teacher_indices = []
         for i, signal in enumerate(signals):
             if signal.hidden_states is not None:
                 signal.hidden_states = tuple(hs.to(self.config.compute_device) for hs in signal.hidden_states)
@@ -156,6 +180,8 @@ class DistillationTrainer(SFTTrainer):
                     if "teacher" in inputs:
                         batch_size = inputs['input_ids'].shape[0]
                         loss = torch.zeros((), device=self.config.compute_device)
+                        per_teacher_sums = {}
+                        per_teacher_counts = {}
                         for k in range(batch_size):
                             teacher_name = inputs['teacher'][k]
                             if teacher_name not in weight_dict:
@@ -181,9 +207,16 @@ class DistillationTrainer(SFTTrainer):
                                 num_items_in_batch=None,
                             )
                             loss += partial_loss * weight_dict[teacher_name]
+                            # 逐教师累加原始 loss
+                            per_teacher_sums[teacher_name] = per_teacher_sums.get(teacher_name, 0.0) + partial_loss.detach()
+                            per_teacher_counts[teacher_name] = per_teacher_counts.get(teacher_name, 0) + 1
                         # 为了简化流程，这里假设每个教师的loss_function的weight总和都是1，没有考虑weight总和非1的情况
                         loss = loss / batch_size
                         weight_value = sum(weight_dict[inputs['teacher'][k]] for k in range(batch_size)) / batch_size
+                        # 记录逐教师原始 loss（未乘顶层 weight），用于日志
+                        for t, s in per_teacher_sums.items():
+                            cnt = per_teacher_counts[t]
+                            per_teacher_logs.append((cfg.function.value, t, float(s / cnt), cnt))
                     else:
                         # online distillation: fall back to teacher index ordering
                         teacher_weights = [w.weight for w in cfg.weight]
@@ -210,6 +243,7 @@ class DistillationTrainer(SFTTrainer):
                     weights.append(weight_value)
                 else:
                     weights.append(cfg.weight)
+                loss_teacher_indices.append(i)
             # recover
             if signal.hidden_states is not None:
                 signal.hidden_states = tuple(hs.to(self.model.device) for hs in signal.hidden_states)
@@ -220,23 +254,58 @@ class DistillationTrainer(SFTTrainer):
                 signal.sparse_values = signal.sparse_values.to(self.model.device)
             torch.cuda.empty_cache()
 
+        # 暂存本步逐教师原始 loss（未乘顶层 weight），供 compute_loss 日志使用
+        self._last_per_teacher_logs = per_teacher_logs
+
         total_loss = 0.0
         for loss, weight in zip(losses, weights):
             total_loss += loss * weight
         total_loss = total_loss / sum(weights) / len(self.multi_signal_sources)
-        self.log(
-            {
-                f"distillation_loss/{idx + 1}_{loss_fn}": loss.item()
-                for idx, (loss, loss_fn) in enumerate(zip(losses, loss_fns))
-            }
-        )
+
+        # 累计若干 micro-batch 后再在主进程上报一次，避免 wandb 同一 global_step 记录多值
+        device_for_logs = student_outputs.logits.device
+        log_losses = torch.tensor([loss.item() for loss in losses], device=device_for_logs)
+        if self._distill_accum_losses is None:
+            self._distill_accum_losses = torch.zeros_like(log_losses)
+            self._distill_micro_step = 0
+        self._distill_accum_losses += log_losses
+        self._distill_micro_step += 1
+
+        should_log = self._distill_micro_step >= self.args.gradient_accumulation_steps
+        if should_log:
+            # 当前进程的平均
+            avg_losses = self._distill_accum_losses / float(self._distill_micro_step)
+
+            # 多机/多卡同步平均
+            is_main = True
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(avg_losses, op=dist.ReduceOp.SUM)
+                avg_losses = avg_losses / dist.get_world_size()
+                is_main = dist.get_rank() == 0
+
+            if is_main:
+                log_dict = {}
+                # 逐教师原始 loss（未乘顶层 weight）
+                for (loss_fn, teacher_name), entry in list(getattr(self, "_per_teacher_accum", {}).items()):
+                    if entry["count"] > 0:
+                        log_dict[f"distillation_loss_raw/{loss_fn}/{teacher_name}"] = entry["loss_sum"] / entry["count"]
+                # 加权后（顶层权重之前）的多教师 loss，按信号源 index 记录
+                for idx, (val, loss_fn, teacher_idx) in enumerate(zip(avg_losses, loss_fns, loss_teacher_indices)):
+                    log_key = f"distillation_loss/{loss_fn}/total"
+                    log_dict[log_key] = val.item()
+                if log_dict:
+                    self.log(log_dict)
+
+            # 重置累计
+            self._distill_accum_losses.zero_()
+            self._distill_micro_step = 0
+            self._per_teacher_accum = {}
         return total_loss
 
 
 class DistillationDataCollator(DataCollatorForLanguageModeling):
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         batch = super().torch_call(examples)
-
         if "id" in examples[0]:
             batch["id"] = [example["id"] for example in examples]
         if "teacher" in examples[0]:
