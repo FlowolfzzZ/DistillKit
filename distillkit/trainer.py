@@ -168,6 +168,7 @@ class DistillationTrainer(SFTTrainer):
             else:
                 signal.sparse_ids = signal.sparse_ids.to(self.config.compute_device)
                 signal.sparse_values = signal.sparse_values.to(self.config.compute_device)
+            teacher_name = self.teacher_names[i] if i < len(self.teacher_names) else f"teacher{i+1}"
             for j, loss_fn in enumerate(self.loss_functions):
                 cfg = self.config.loss_functions[j]
                 # teacher-specific weights
@@ -228,6 +229,7 @@ class DistillationTrainer(SFTTrainer):
                             hidden_state_mapping=self.multi_hidden_state_mappings[i],
                             num_items_in_batch=num_items_in_batch,
                         )
+                        per_teacher_logs.append((cfg.function.value, teacher_name, loss.item(), 1))
                 else:
                     loss = loss_fn(
                         student_outputs,
@@ -237,6 +239,7 @@ class DistillationTrainer(SFTTrainer):
                         num_items_in_batch=num_items_in_batch,
                     )
                     weight_value = cfg.weight
+                    per_teacher_logs.append((cfg.function.value, teacher_name, loss.item(), 1))
                 losses.append(loss)
                 loss_fns.append(cfg.function.value)
                 if isinstance(cfg.weight, list):
@@ -291,8 +294,7 @@ class DistillationTrainer(SFTTrainer):
                         log_dict[f"distillation_loss_raw/{loss_fn}/{teacher_name}"] = entry["loss_sum"] / entry["count"]
                 # 加权后（顶层权重之前）的多教师 loss，按信号源 index 记录
                 for idx, (val, loss_fn, teacher_idx) in enumerate(zip(avg_losses, loss_fns, loss_teacher_indices)):
-                    log_key = f"distillation_loss/{loss_fn}/total"
-                    log_dict[log_key] = val.item()
+                    log_dict[f"distillation_loss/{loss_fn}/total"] = val.item()
                 if log_dict:
                     self.log(log_dict)
 

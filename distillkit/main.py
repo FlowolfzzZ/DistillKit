@@ -217,6 +217,7 @@ def load_student_model(
         )
     LOG.info(f"Loading model {config.train_model} with class {auto_cls}")
     extra_kwargs = {"trust_remote_code": config.trust_remote_code}
+    config.model_kwargs.pop("trust_remote_code", None)
     if config.use_flash_attention:
         extra_kwargs["attn_implementation"] = "flash_attention_2"
         extra_kwargs["torch_dtype"] = torch.bfloat16
@@ -338,6 +339,13 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     accelerator = Accelerator()
     with accelerator.main_process_first():
         tokenizer = load_tokenizer(config)
+        # 针对9G缺少pad_token问题修改
+        if tokenizer.pad_token is None:
+        # 使用 eos_token 作为补全符（最常用）
+            tokenizer.pad_token = tokenizer.eos_token
+        # 如果 EOS 也没有，就用 unk_token
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.unk_token
         ds_train, ds_eval = load_data(
             config.dataset, tokenizer, enable_thinking=config.training_args.get("enable_thinking", None)
         )
@@ -350,7 +358,6 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
     model = load_student_model(config, tokenizer_vocab_size)
 
     config_kwargs = dict(config.training_args)
-    enable_thinking = config_kwargs.pop("enable_thinking", None)
     if config.completion_only_loss is not None:
         # Allow YAML to override completion_only_loss explicitly
         config_kwargs["completion_only_loss"] = config.completion_only_loss
